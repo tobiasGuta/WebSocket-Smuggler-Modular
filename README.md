@@ -18,7 +18,7 @@ This tool is essential for testing modern applications where simple header manip
 * **Native Burp UI:** Integrates seamlessly with Burp Suite, using the native **Request/Response editors** for professional traffic analysis. Results table is color-coded by status for instant visual triage.
 * **Raw Socket Engine:** Bypasses Burp's high-level HTTP stack to ensure the smuggled payload is sent immediately and atomically, improving exploitation reliability.
 * **CSV Export:** Export the full results table to CSV for reporting and further analysis.
-* **Persistent Configuration:** All settings are saved across Burp restarts — no need to reconfigure every session.
+* **Persistent Configuration:** All settings are saved across Burp restarts no need to reconfigure every session.
 * **Input Validation:** All fields are validated before attacks launch, with clear error messages.
 
 ---
@@ -29,7 +29,7 @@ The extension follows a modular architecture with clean separation of concerns:
 
 | File | Responsibility |
 | :--- | :--- |
-| `WebSocketSmuggler.java` | Entry point — registers extension, tab, context menu, unload handler |
+| `WebSocketSmuggler.java` | Entry point registers extension, tab, context menu, unload handler |
 | `SmugglerUI.java` | All Swing UI, event handling, persistence, CSV export, color-coded table |
 | `AttackEngine.java` | Raw socket logic, thread pool management, pause/resume/stop |
 | `AttackConfig.java` | Immutable configuration holder with input validation |
