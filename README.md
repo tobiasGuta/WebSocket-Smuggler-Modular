@@ -9,14 +9,15 @@ This tool is essential for testing modern applications where simple header manip
 ---
 
 ## Key Features
-* **Intelligent Response Parsing:** Automatically distinguishes between harmless HTTP Pipelining (Safe), potential smuggling, and confirmed smuggling (with `Upgrade` header detection), eliminating common false positives.
+* **Boundary-Aware Response Parsing:** Parses HTTP response boundaries, headers, `Content-Length`, and chunked encoding before reporting evidence. Findings are labeled for manual validation unless a separate differential test confirms impact.
 * **Dual Attack Mode:** Supports two distinct types of blind smuggling attacks (Simple Desync vs. SSRF Trigger).
 * **Wordlist Fuzzing Engine:** Load custom wordlists to brute-force internal endpoints or parameters within the smuggled request.
 * **Multi-Threaded Attacks:** Configure the number of concurrent threads (1–50) to speed up large wordlist scans.
 * **Attack Controls:** Pause, resume, and stop attacks on demand, giving you full control over traffic generation.
-* **Configurable Timing:** Adjust socket timeout and inter-request delay to tune speed vs. stealth for different targets.
+* **Configurable Network Limits:** Adjust connect, read, idle, capture-size, and inter-request delay limits to tune speed vs. reliability for different targets.
 * **Native Burp UI:** Integrates seamlessly with Burp Suite, using the native **Request/Response editors** for professional traffic analysis. Results table is color-coded by status for instant visual triage.
 * **Raw Socket Engine:** Bypasses Burp's high-level HTTP stack to ensure the smuggled payload is sent immediately and atomically, improving exploitation reliability.
+* **Request Context Preservation:** Can copy allowlisted headers from the selected Burp request so authenticated and tenant-routed targets are tested in the same application context.
 * **CSV Export:** Export the full results table to CSV for reporting and further analysis.
 * **Persistent Configuration:** All settings are saved across Burp restarts no need to reconfigure every session.
 * **Input Validation:** All fields are validated before attacks launch, with clear error messages.
@@ -34,7 +35,8 @@ The extension follows a modular architecture with clean separation of concerns:
 | `AttackEngine.java` | Raw socket logic, thread pool management, pause/resume/stop |
 | `AttackConfig.java` | Immutable configuration holder with input validation |
 | `AttackLog.java` | Data class for storing attack history entries |
-| `ResponseAnalyzer.java` | Enhanced response parsing — detects Upgrade headers, tracks response length |
+| `RequestTemplateBuilder.java` | Builds the two-request raw socket payload while preserving selected request headers |
+| `ResponseAnalyzer.java` | Boundary-aware response parsing, Upgrade header evidence, response length tracking |
 
 ---
 
@@ -64,9 +66,10 @@ The extension follows a modular architecture with clean separation of concerns:
 
 1.  Browse the target application through Burp Suite's Proxy.
 2.  In **Proxy → HTTP History**, right-click any request to the target and select **"Send to WebSocket Smuggler"**.
-3.  The extension tab will activate with the target set. Configure your attack settings and click **Run Attack**.
+3.  The target is loaded into the extension without sending attack traffic. Configure your attack settings and click **Run Attack**.
 
 > You can run a single probe immediately (no wordlist needed), or load a wordlist for dictionary-based fuzzing.
+> By default, **Require Burp scope** blocks attacks unless the selected target is in Burp's configured target scope.
 
 ---
 
@@ -96,7 +99,7 @@ This mode is used to bypass **smart proxies** (like Nginx) by chaining the attac
 | Field | Value | Purpose |
 | :--- | :--- | :--- |
 | **[x] Enable SSRF** | *(Checked)* | Activates SSRF Injection logic. |
-| **SSRF Injection Path** | `/check-url?server=` | The full path up to the injected URL (e.g., must include the parameter name and the equals sign). |
+| **SSRF Injection Path** | `/check-url?server={SSRF_SERVER}` | The request target containing `{SSRF_SERVER}`. In normal mode, the server URL is URL-encoded before substitution. |
 | **Python Server URL** | `http://<YOUR_VPS_IP>:80` | The **external endpoint** running your custom Python script. |
 | **Smuggled Path** | `/flag` | The resource to smuggle the request to. |
 
@@ -121,7 +124,7 @@ You can perform dictionary-based attacks to discover internal endpoints or fuzz 
     * *Example 2 (Parameter Fuzzing):* `/admin/delete?user={PAYLOAD}`
 3.  **Run Attack:** Click `Run Attack`. The extension will iterate through the list, sending a full smuggling sequence for every item.
 
-> **Note:** Fuzzing works with both Simple Mode and SSRF Mode. You can also run an attack without a wordlist for a quick single-shot probe.
+> **Note:** Fuzzing works with both Simple Mode and SSRF Mode. If a wordlist is loaded, `{PAYLOAD}` is required. If no wordlist is loaded, `{PAYLOAD}` is rejected so it is not silently replaced with a placeholder value.
 
 ---
 
@@ -129,9 +132,31 @@ You can perform dictionary-based attacks to discover internal endpoints or fuzz 
 
 | Setting | Default | Range | Purpose |
 | :--- | :--- | :--- | :--- |
-| **Socket Timeout (ms)** | `5000` | 100–60000 | How long to wait for the server response. Increase for slow proxies or tunneled SSRF. |
+| **Connect Timeout (ms)** | `3000` | 100–60000 | Maximum time for TCP connect and TLS handshake setup. |
+| **Read Timeout (ms)** | `5000` | 100–60000 | Maximum total time spent capturing response data for one probe. |
+| **Idle Timeout (ms)** | `1000` | 100–60000 | Stop capturing after this long without new response data. |
+| **Max Capture (KB)** | `1024` | 1024–10240 | Maximum response bytes retained per probe. Truncated captures are labeled. |
 | **Request Delay (ms)** | `50` | 0–10000 | Delay between requests in wordlist mode. Increase to avoid rate-limiting. |
 | **Threads** | `1` | 1–50 | Number of concurrent attack threads. Increase for faster wordlist scans. |
+| **Max Payload (bytes)** | `2048` | 1–65536 | Maximum UTF-8 byte size for each wordlist payload. |
+| **Allow raw request targets** | Off | Off/On | Advanced mode. Allows non-origin-form request targets and control characters in request targets/payloads. Normal mode rejects them. |
+
+Normal mode requires generated request targets to be origin-form paths beginning with `/`, rejects carriage returns and control characters, URL-encodes the `{SSRF_SERVER}` substitution, and validates every wordlist payload before sending traffic.
+
+---
+
+## Request Context
+
+The selected Burp request is used as the source for allowlisted headers, not just as a socket destination.
+
+* **Preserve selected headers:** Enabled by default. Copies matching headers into both the WebSocket upgrade request and the smuggled request.
+* **Headers:** Comma-separated header allowlist. Defaults to `Host, Cookie, Authorization, Origin`.
+* Add custom application routing headers such as `X-Tenant-ID`, `X-Org-ID`, or `X-Forwarded-Host` when the target depends on them.
+* Protocol-controlled headers such as `Connection`, `Upgrade`, `Sec-WebSocket-*`, `Content-Length`, `Transfer-Encoding`, and `Expect` are not copied because the attack payload must control those values.
+* **Connection Mode:** Always uses a direct raw TCP/TLS connection. Burp upstream proxy settings, SOCKS configuration, client certificate handling, match-and-replace rules, and project-level TLS behavior are not applied to attack traffic.
+* **Verify TLS certificates:** Disabled by default to preserve lab/proxy testing behavior. Enable it to use the JVM default trust store and reject invalid certificates.
+* **SNI Override:** Optional TLS SNI hostname. Blank uses the selected request host.
+* **Connect Host:** Optional socket destination override. This changes where the TCP/TLS connection is opened without changing the preserved `Host` header.
 
 ---
 
@@ -140,29 +165,30 @@ You can perform dictionary-based attacks to discover internal endpoints or fuzz 
 Long-running fuzzing attacks can be managed using the control panel:
 
 * **Run Attack:** Fires a single probe (no wordlist) or starts wordlist iteration. Requires a target sent via right-click context menu.
-* **Pause/Resume:** Temporarily halts the attack thread without losing progress. Useful if you need to inspect results or modify network settings.
-* **Stop:** Completely terminates the current attack cycle.
+* **Require Burp scope:** Blocks `Run Attack` for targets outside Burp's configured target scope. Enabled by default.
+* **Pause/Resume:** Pauses new submissions and worker progress checks. Already-active socket reads may continue until data arrives, idle timeout fires, or the read timeout expires.
+* **Stop:** Cancels the current run, stops queued work, and closes active sockets.
 * **Clear Results:** Clears the results table and attack history.
 * **Export CSV:** Exports the full results table to a CSV file for reporting.
 
-A **progress bar** shows real-time completion status during wordlist attacks.
+A **progress bar** shows real-time completion status. Wordlist submissions use a bounded queue instead of queuing the entire wordlist at once.
 
 ---
 
 ## Interpreting Results (Status Logic)
 
-The extension analyzes the raw byte stream and HTTP headers to determine if the connection was pipelined or smuggled. Results are **color-coded** for instant visual triage.
+The extension parses response boundaries before interpreting status lines or headers. Results are **color-coded** for triage, but analyzer output is evidence, not proof of exploitability. Treat observations as manual-validation prompts unless a separate differential test shows that a protected request succeeds through the upgrade sequence and fails through the normal front-end route.
 
 | Status | Color | Meaning | Verdict |
 | :--- | :--- | :--- | :--- |
-| **Smuggling Confirmed (101 + Upgrade)** | 🔴 Red | The tool detected a `101 Switching Protocols` response **with** `Connection: Upgrade` and `Upgrade: websocket` headers. The tunnel was fully opened. | **Vulnerable** |
-| **Smuggling Detected (X → Y)** | 🔴 Red | The tool received **2 responses** where the second has a **success code** (2xx/3xx). This means the smuggled request reached the backend and was processed (e.g., `426 → 200`). | **Vulnerable** |
-| **Potential Smuggling (101)** | 🔴 Red | The tool detected a `101` response but without full Upgrade headers. Likely vulnerable, investigate further. | **Likely Vulnerable** |
-| **Pipelining (Safe)** | 🟢 Green | The tool detected **2 responses** where both are **error codes** (4xx/5xx). The proxy parsed both requests individually and rejected them (e.g., `426 → 403`). | **Not Vulnerable** |
-| **Single Response** | 🟡 Amber | The tool received one response (e.g., `403`) and the socket closed immediately. | **Blocked/Failed** |
-| **Error** | ⚪ Gray | A connection or network error occurred. | **Check Logs** |
+| **WebSocket Upgrade Accepted - Manual Validation Required** | Amber | A real `101 Switching Protocols` response included `Connection: Upgrade` and `Upgrade: websocket` headers. This confirms the handshake was accepted, not that smuggling occurred. | **Evidence Only** |
+| **Second HTTP-Like Response Observed (X -> Y) - Manual Validation Required** | Amber | Two complete HTTP response boundaries were parsed and the second response was 2xx/3xx. This can be normal HTTP pipelining. | **Evidence Only** |
+| **Possible Pipelining (X -> Y) - Manual Validation Required** | Amber | Two complete HTTP response boundaries were parsed and the second response was not 2xx/3xx. | **Evidence Only** |
+| **Single Response (X) - Manual Validation Required** | Amber | One complete HTTP response was parsed. | **Evidence Only** |
+| **No Response / Connection Closed** | Gray | No parseable HTTP response was received. | **No Evidence** |
+| **Error** | Gray | A connection or network error occurred. | **Check Logs** |
 
-The results table also includes a **Length** column showing the response size in bytes length anomalies across fuzzing runs can indicate interesting responses.
+Statuses may include capture suffixes such as `[EOF]`, `[Idle Timeout]`, `[Read Timeout]`, `[Connection Reset]`, `[Capture Truncated]`, or `[Evidence Complete]`. The results table also includes a **Length** column showing the captured response size in bytes; length anomalies across fuzzing runs can indicate interesting responses.
 
 ---
 

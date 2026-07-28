@@ -45,7 +45,7 @@ public class WebSocketSmuggler implements BurpExtension, ContextMenuItemsProvide
         item.addActionListener(e -> {
             List<HttpRequestResponse> selection = event.selectedRequestResponses();
             if (selection != null && !selection.isEmpty() && ui != null) {
-                ui.setTargetAndAttack(selection.get(0));
+                ui.setTarget(selection.get(0));
             }
         });
         menuList.add(item);

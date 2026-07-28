@@ -48,8 +48,20 @@ public class SmugglerUI implements AttackEngine.AttackListener {
     private static final String P_SMUGGLED = "cfg.smuggled";
     private static final String P_VERSION = "cfg.version";
     private static final String P_TIMEOUT = "cfg.timeout";
+    private static final String P_CONNECT_TIMEOUT = "cfg.connectTimeout";
+    private static final String P_READ_TIMEOUT = "cfg.readTimeout";
+    private static final String P_IDLE_TIMEOUT = "cfg.idleTimeout";
+    private static final String P_MAX_CAPTURE_KB = "cfg.maxCaptureKb";
     private static final String P_DELAY = "cfg.delay";
     private static final String P_THREADS = "cfg.threads";
+    private static final String P_MAX_PAYLOAD_BYTES = "cfg.maxPayloadBytes";
+    private static final String P_ALLOW_RAW_TARGETS = "cfg.allowRawTargets";
+    private static final String P_REQUIRE_SCOPE = "cfg.requireScope";
+    private static final String P_PRESERVE_HEADERS = "cfg.preserveHeaders";
+    private static final String P_PRESERVED_HEADER_NAMES = "cfg.preservedHeaderNames";
+    private static final String P_VERIFY_TLS = "cfg.verifyTls";
+    private static final String P_SNI_OVERRIDE = "cfg.sniOverride";
+    private static final String P_CONNECTION_ADDRESS_OVERRIDE = "cfg.connectionAddressOverride";
 
     private static final int COL_ID = 0;
     private static final int COL_HOST = 1;
@@ -70,9 +82,20 @@ public class SmugglerUI implements AttackEngine.AttackListener {
     private JTextField ssrfServerField;
     private JTextField smuggledPathField;
     private JTextField versionField;
-    private JTextField timeoutField;
+    private JTextField connectTimeoutField;
+    private JTextField readTimeoutField;
+    private JTextField idleTimeoutField;
+    private JTextField maxCaptureKbField;
     private JTextField delayField;
     private JTextField threadsField;
+    private JTextField maxPayloadBytesField;
+    private JCheckBox allowRawTargetsToggle;
+    private JCheckBox requireScopeToggle;
+    private JCheckBox preserveHeadersToggle;
+    private JTextField preservedHeadersField;
+    private JCheckBox verifyTlsToggle;
+    private JTextField sniOverrideField;
+    private JTextField connectionAddressOverrideField;
 
     private JButton loadWordlistBtn;
     private JButton runBtn;
@@ -102,15 +125,19 @@ public class SmugglerUI implements AttackEngine.AttackListener {
     public JComponent getUI() { return mainPanel; }
     public AttackEngine getEngine() { return engine; }
 
-    public void setTargetAndAttack(HttpRequestResponse target) {
+    public void setTarget(HttpRequestResponse target) {
         this.targetRequest = target;
         SwingUtilities.invokeLater(this::checkRunButtonState);
-        api.logging().logToOutput("Target set: " + target.httpService().host());
+        api.logging().logToOutput("Target set: " + target.httpService().host() +
+                ". Configure the attack and click Run Attack to send traffic.");
+    }
 
-        AttackConfig config = buildConfig();
-        if (config != null) {
-            engine.performSingleAttack(target, config);
-        }
+    /**
+     * Retained for compatibility with older callers. This now only sets the target.
+     */
+    @Deprecated
+    public void setTargetAndAttack(HttpRequestResponse target) {
+        setTarget(target);
     }
 
     public void saveConfig() {
@@ -122,9 +149,20 @@ public class SmugglerUI implements AttackEngine.AttackListener {
             data.setString(P_SSRF_SERVER, ssrfServerField.getText());
             data.setString(P_SMUGGLED, smuggledPathField.getText());
             data.setString(P_VERSION, versionField.getText());
-            data.setString(P_TIMEOUT, timeoutField.getText());
+            data.setString(P_CONNECT_TIMEOUT, connectTimeoutField.getText());
+            data.setString(P_READ_TIMEOUT, readTimeoutField.getText());
+            data.setString(P_IDLE_TIMEOUT, idleTimeoutField.getText());
+            data.setString(P_MAX_CAPTURE_KB, maxCaptureKbField.getText());
             data.setString(P_DELAY, delayField.getText());
             data.setString(P_THREADS, threadsField.getText());
+            data.setString(P_MAX_PAYLOAD_BYTES, maxPayloadBytesField.getText());
+            data.setBoolean(P_ALLOW_RAW_TARGETS, allowRawTargetsToggle.isSelected());
+            data.setBoolean(P_REQUIRE_SCOPE, requireScopeToggle.isSelected());
+            data.setBoolean(P_PRESERVE_HEADERS, preserveHeadersToggle.isSelected());
+            data.setString(P_PRESERVED_HEADER_NAMES, preservedHeadersField.getText());
+            data.setBoolean(P_VERIFY_TLS, verifyTlsToggle.isSelected());
+            data.setString(P_SNI_OVERRIDE, sniOverrideField.getText());
+            data.setString(P_CONNECTION_ADDRESS_OVERRIDE, connectionAddressOverrideField.getText());
         } catch (Exception e) {
             api.logging().logToError("Failed to save config: " + e.getMessage());
         }
@@ -177,9 +215,10 @@ public class SmugglerUI implements AttackEngine.AttackListener {
         JPanel togglePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 2));
         togglePanel.add(ssrfToggle);
 
-        JPanel fieldsPanel = new JPanel(new GridLayout(1, 2, 12, 0));
+        JPanel fieldsPanel = new JPanel(new GridLayout(1, 3, 12, 0));
         fieldsPanel.add(buildConnectionPanel());
         fieldsPanel.add(buildAttackSettingsPanel());
+        fieldsPanel.add(buildHeaderContextPanel());
 
         panel.add(togglePanel, BorderLayout.NORTH);
         panel.add(fieldsPanel, BorderLayout.CENTER);
@@ -197,8 +236,8 @@ public class SmugglerUI implements AttackEngine.AttackListener {
 
         simpleBaitPathField = monoField("/socket",
                 "Backend WebSocket endpoint path");
-        ssrfInjectionPathField = monoField("/check-url?server=",
-                "SSRF path including parameter name and '='");
+        ssrfInjectionPathField = monoField("/check-url?server=" + AttackConfig.SSRF_SERVER_PLACEHOLDER,
+                "SSRF path containing " + AttackConfig.SSRF_SERVER_PLACEHOLDER);
         ssrfServerField = monoField("http://127.0.0.1:8000",
                 "External server URL for SSRF trigger");
 
@@ -226,19 +265,78 @@ public class SmugglerUI implements AttackEngine.AttackListener {
                 "Target path — use {PAYLOAD} for wordlist substitution");
         versionField = monoField("13",
                 "WebSocket handshake version (e.g. 13 or 777)");
-        timeoutField = monoField("5000",
-                "Socket read timeout in ms (100–60000)");
+        connectTimeoutField = monoField("3000",
+                "TCP/TLS connect timeout in ms (100–60000)");
+        readTimeoutField = monoField("5000",
+                "Maximum total response read time in ms (100–60000)");
+        idleTimeoutField = monoField("1000",
+                "Stop reading after this many ms without response data (100–60000)");
+        maxCaptureKbField = monoField("1024",
+                "Maximum captured response bytes in KB (1024–10240)");
         delayField = monoField("50",
                 "Delay between requests in ms (0–10000)");
         threadsField = monoField("1",
                 "Concurrent attack threads (1–50)");
+        maxPayloadBytesField = monoField("2048",
+                "Maximum wordlist payload size in UTF-8 bytes (1–65536)");
+        allowRawTargetsToggle = new JCheckBox("Allow raw request targets", false);
+        allowRawTargetsToggle.setToolTipText("Advanced: allow non-origin-form targets and control characters in request targets/payloads");
+        allowRawTargetsToggle.addActionListener(e -> saveConfig());
 
         addRow(panel, c, 0, "Smuggled Path:", smuggledPathField);
         addRow(panel, c, 1, "WS Version:", versionField);
-        addRow(panel, c, 2, "Socket Timeout (ms):", timeoutField);
-        addRow(panel, c, 3, "Request Delay (ms):", delayField);
-        addRow(panel, c, 4, "Threads:", threadsField);
+        addRow(panel, c, 2, "Connect Timeout (ms):", connectTimeoutField);
+        addRow(panel, c, 3, "Read Timeout (ms):", readTimeoutField);
+        addRow(panel, c, 4, "Idle Timeout (ms):", idleTimeoutField);
+        addRow(panel, c, 5, "Max Capture (KB):", maxCaptureKbField);
+        addRow(panel, c, 6, "Request Delay (ms):", delayField);
+        addRow(panel, c, 7, "Threads:", threadsField);
+        addRow(panel, c, 8, "Max Payload (bytes):", maxPayloadBytesField);
+        c.gridx = 0; c.gridy = 9; c.gridwidth = 2; c.weightx = 1.0; c.weighty = 0;
+        panel.add(allowRawTargetsToggle, c);
 
+        return panel;
+    }
+
+    private JPanel buildHeaderContextPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(ACCENT),
+                " Request Context ", TitledBorder.LEFT, TitledBorder.TOP,
+                SECTION_TITLE, ACCENT));
+
+        GridBagConstraints c = gbc();
+
+        preserveHeadersToggle = new JCheckBox("Preserve selected headers", true);
+        preserveHeadersToggle.setToolTipText("Copy allowlisted headers from the selected Burp request into both generated requests");
+        preserveHeadersToggle.addActionListener(e -> { toggleHeaderFields(); saveConfig(); });
+
+        preservedHeadersField = monoField(RequestTemplateBuilder.DEFAULT_PRESERVED_HEADERS,
+                "Comma-separated header names to copy from the selected request");
+        JTextField connectionModeField = monoField("Direct raw connection",
+                "Uses direct TCP/TLS sockets; Burp upstream proxy settings are not applied");
+        connectionModeField.setEditable(false);
+        verifyTlsToggle = new JCheckBox("Verify TLS certificates", false);
+        verifyTlsToggle.setToolTipText("Use the JVM default trust store instead of allowing invalid certificates");
+        verifyTlsToggle.addActionListener(e -> saveConfig());
+        sniOverrideField = monoField("",
+                "Optional SNI hostname for TLS connections; blank uses the selected request host");
+        connectionAddressOverrideField = monoField("",
+                "Optional TCP/TLS connection host; blank uses the selected request host");
+
+        c.gridx = 0; c.gridy = 0; c.gridwidth = 2; c.weightx = 1.0; c.weighty = 0;
+        panel.add(preserveHeadersToggle, c);
+        addRow(panel, c, 1, "Headers:", preservedHeadersField);
+        addRow(panel, c, 2, "Connection Mode:", connectionModeField);
+        c.gridx = 0; c.gridy = 3; c.gridwidth = 2; c.weightx = 1.0; c.weighty = 0;
+        panel.add(verifyTlsToggle, c);
+        addRow(panel, c, 4, "SNI Override:", sniOverrideField);
+        addRow(panel, c, 5, "Connect Host:", connectionAddressOverrideField);
+
+        c.gridy = 6; c.weighty = 1.0; c.gridwidth = 2;
+        panel.add(Box.createVerticalGlue(), c);
+
+        toggleHeaderFields();
         return panel;
     }
 
@@ -254,8 +352,13 @@ public class SmugglerUI implements AttackEngine.AttackListener {
         loadWordlistBtn.addActionListener(e -> loadWordlist());
         wordlistStatusLabel = new JLabel("No wordlist loaded");
         wordlistStatusLabel.setForeground(Color.GRAY);
+        requireScopeToggle = new JCheckBox("Require Burp scope", true);
+        requireScopeToggle.setToolTipText("Block Run Attack unless the selected target is in Burp's configured target scope");
+        requireScopeToggle.addActionListener(e -> saveConfig());
         wlPanel.add(loadWordlistBtn);
         wlPanel.add(wordlistStatusLabel);
+        wlPanel.add(Box.createHorizontalStrut(20));
+        wlPanel.add(requireScopeToggle);
 
         progressBar = new JProgressBar(0, 100);
         progressBar.setStringPainted(true);
@@ -347,6 +450,11 @@ public class SmugglerUI implements AttackEngine.AttackListener {
         if (config == null) return;
 
         List<String> errors = config.validate();
+        if (!loadedWordlist.isEmpty()) {
+            errors.addAll(config.validatePayloads(new ArrayList<>(loadedWordlist)));
+        } else if (config.usesPayloadPlaceholder()) {
+            errors.add("Load a wordlist or remove " + AttackConfig.PAYLOAD_PLACEHOLDER + " from Smuggled Path.");
+        }
         if (!errors.isEmpty()) {
             JOptionPane.showMessageDialog(api.userInterface().swingUtils().suiteFrame(), String.join("\n", errors),
                     "Validation Error", JOptionPane.WARNING_MESSAGE);
@@ -355,13 +463,15 @@ public class SmugglerUI implements AttackEngine.AttackListener {
 
         HttpRequestResponse target = resolveTarget();
         if (target == null) return;
+        if (!isTargetAllowedByScope(target)) return;
+
+        setAttackUIState(true);
+        progressBar.setValue(0);
+        progressBar.setString("Starting...");
 
         if (loadedWordlist.isEmpty()) {
             engine.performSingleAttack(target, config);
         } else {
-            setAttackUIState(true);
-            progressBar.setValue(0);
-            progressBar.setString("Starting...");
             engine.performWordlistAttack(target, config, new ArrayList<>(loadedWordlist));
         }
     }
@@ -373,7 +483,9 @@ public class SmugglerUI implements AttackEngine.AttackListener {
 
     private void stopAttack() {
         engine.stop();
-        setAttackUIState(false);
+        progressBar.setString("Stopping...");
+        pauseBtn.setEnabled(false);
+        stopBtn.setEnabled(false);
     }
 
     private void clearResults() {
@@ -494,10 +606,10 @@ public class SmugglerUI implements AttackEngine.AttackListener {
     }
 
     @Override
-    public void onBatchComplete() {
+    public void onBatchComplete(boolean cancelled) {
         SwingUtilities.invokeLater(() -> {
             setAttackUIState(false);
-            progressBar.setString("Complete");
+            progressBar.setString(cancelled ? "Stopped" : "Complete");
         });
     }
 
@@ -524,11 +636,36 @@ public class SmugglerUI implements AttackEngine.AttackListener {
         return null;
     }
 
+    private boolean isTargetAllowedByScope(HttpRequestResponse target) {
+        if (!requireScopeToggle.isSelected()) return true;
+
+        try {
+            if (target.request() != null && target.request().isInScope()) return true;
+        } catch (Exception e) {
+            api.logging().logToError("Scope check failed: " + e.getMessage());
+        }
+
+        String targetUrl = target.request() != null ? target.request().url() : target.httpService().host();
+        JOptionPane.showMessageDialog(api.userInterface().swingUtils().suiteFrame(),
+                "Target is not in Burp scope:\n" + targetUrl + "\n\n" +
+                "Add the target to Burp's target scope or disable \"Require Burp scope\".",
+                "Target Out of Scope", JOptionPane.WARNING_MESSAGE);
+        api.logging().logToOutput("Blocked attack for out-of-scope target: " + targetUrl);
+        return false;
+    }
+
     private void setAttackUIState(boolean active) {
         SwingUtilities.invokeLater(() -> {
             runBtn.setEnabled(!active && targetRequest != null && !engine.isRunning());
             loadWordlistBtn.setEnabled(!active);
             ssrfToggle.setEnabled(!active);
+            allowRawTargetsToggle.setEnabled(!active);
+            maxPayloadBytesField.setEnabled(!active);
+            preserveHeadersToggle.setEnabled(!active);
+            preservedHeadersField.setEnabled(!active && preserveHeadersToggle.isSelected());
+            verifyTlsToggle.setEnabled(!active);
+            sniOverrideField.setEnabled(!active);
+            connectionAddressOverrideField.setEnabled(!active);
             pauseBtn.setEnabled(active);
             stopBtn.setEnabled(active);
             pauseBtn.setText("Pause");
@@ -545,6 +682,10 @@ public class SmugglerUI implements AttackEngine.AttackListener {
         simpleBaitPathField.setEnabled(!isSSRF);
         ssrfInjectionPathField.setEnabled(isSSRF);
         ssrfServerField.setEnabled(isSSRF);
+    }
+
+    private void toggleHeaderFields() {
+        preservedHeadersField.setEnabled(preserveHeadersToggle.isSelected());
     }
 
     private void updateEditors() {
@@ -572,13 +713,23 @@ public class SmugglerUI implements AttackEngine.AttackListener {
                     ssrfServerField.getText().trim(),
                     smuggledPathField.getText().trim(),
                     versionField.getText().trim(),
-                    Integer.parseInt(timeoutField.getText().trim()),
+                    Integer.parseInt(connectTimeoutField.getText().trim()),
+                    Integer.parseInt(readTimeoutField.getText().trim()),
+                    Integer.parseInt(idleTimeoutField.getText().trim()),
+                    Integer.parseInt(maxCaptureKbField.getText().trim()) * 1024,
                     Integer.parseInt(delayField.getText().trim()),
-                    Integer.parseInt(threadsField.getText().trim())
+                    Integer.parseInt(threadsField.getText().trim()),
+                    Integer.parseInt(maxPayloadBytesField.getText().trim()),
+                    allowRawTargetsToggle.isSelected(),
+                    preserveHeadersToggle.isSelected(),
+                    preservedHeadersField.getText().trim(),
+                    verifyTlsToggle.isSelected(),
+                    sniOverrideField.getText().trim(),
+                    connectionAddressOverrideField.getText().trim()
             );
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(api.userInterface().swingUtils().suiteFrame(),
-                    "Timeout, Delay, and Threads must be valid numbers.",
+                    "Timeouts, Max Capture, Delay, and Threads must be valid numbers.",
                     "Input Error", JOptionPane.WARNING_MESSAGE);
             return null;
         }
@@ -591,15 +742,40 @@ public class SmugglerUI implements AttackEngine.AttackListener {
             if (ssrf != null) ssrfToggle.setSelected(ssrf);
 
             setIfPresent(data.getString(P_BAIT), simpleBaitPathField);
-            setIfPresent(data.getString(P_SSRF_PATH), ssrfInjectionPathField);
+            String savedSsrfPath = data.getString(P_SSRF_PATH);
+            if (savedSsrfPath != null && !savedSsrfPath.contains(AttackConfig.SSRF_SERVER_PLACEHOLDER)
+                    && savedSsrfPath.endsWith("=")) {
+                savedSsrfPath = savedSsrfPath + AttackConfig.SSRF_SERVER_PLACEHOLDER;
+            }
+            setIfPresent(savedSsrfPath, ssrfInjectionPathField);
             setIfPresent(data.getString(P_SSRF_SERVER), ssrfServerField);
             setIfPresent(data.getString(P_SMUGGLED), smuggledPathField);
             setIfPresent(data.getString(P_VERSION), versionField);
-            setIfPresent(data.getString(P_TIMEOUT), timeoutField);
+            setIfPresent(data.getString(P_CONNECT_TIMEOUT), connectTimeoutField);
+            String savedReadTimeout = data.getString(P_READ_TIMEOUT);
+            if (savedReadTimeout == null || savedReadTimeout.isEmpty()) {
+                savedReadTimeout = data.getString(P_TIMEOUT);
+            }
+            setIfPresent(savedReadTimeout, readTimeoutField);
+            setIfPresent(data.getString(P_IDLE_TIMEOUT), idleTimeoutField);
+            setIfPresent(data.getString(P_MAX_CAPTURE_KB), maxCaptureKbField);
             setIfPresent(data.getString(P_DELAY), delayField);
             setIfPresent(data.getString(P_THREADS), threadsField);
+            setIfPresent(data.getString(P_MAX_PAYLOAD_BYTES), maxPayloadBytesField);
+            Boolean allowRawTargets = data.getBoolean(P_ALLOW_RAW_TARGETS);
+            if (allowRawTargets != null) allowRawTargetsToggle.setSelected(allowRawTargets);
+            Boolean requireScope = data.getBoolean(P_REQUIRE_SCOPE);
+            if (requireScope != null) requireScopeToggle.setSelected(requireScope);
+            Boolean preserveHeaders = data.getBoolean(P_PRESERVE_HEADERS);
+            if (preserveHeaders != null) preserveHeadersToggle.setSelected(preserveHeaders);
+            setIfPresent(data.getString(P_PRESERVED_HEADER_NAMES), preservedHeadersField);
+            Boolean verifyTls = data.getBoolean(P_VERIFY_TLS);
+            if (verifyTls != null) verifyTlsToggle.setSelected(verifyTls);
+            setIfPresent(data.getString(P_SNI_OVERRIDE), sniOverrideField);
+            setIfPresent(data.getString(P_CONNECTION_ADDRESS_OVERRIDE), connectionAddressOverrideField);
 
             toggleSSRFFields();
+            toggleHeaderFields();
         } catch (Exception e) {
             api.logging().logToError("Failed to load persisted config: " + e.getMessage());
         }
@@ -657,16 +833,18 @@ public class SmugglerUI implements AttackEngine.AttackListener {
 
                 Color bg;
                 Color fg;
-                if (status.contains("Smuggling")) {
+                if (status.contains("Differential Behavior Observed")) {
                     bg = SMUGGLING_BG; fg = SMUGGLING_FG;
-                } else if (status.contains("Pipelining")) {
-                    bg = SAFE_BG; fg = SAFE_FG;
-                } else if (status.contains("Single Response")) {
-                    bg = WARNING_BG; fg = WARNING_FG;
-                } else if (status.startsWith("Error")) {
+                } else if (status.startsWith("Error") || status.contains("No Response")) {
                     bg = ERROR_BG; fg = ERROR_FG;
                 } else if (status.contains("Testing")) {
                     bg = TESTING_BG; fg = TESTING_FG;
+                } else if (status.contains("Manual Validation")
+                        || status.contains("WebSocket Upgrade")
+                        || status.contains("Second HTTP-Like Response")
+                        || status.contains("Possible Pipelining")
+                        || status.contains("Single Response")) {
+                    bg = WARNING_BG; fg = WARNING_FG;
                 } else {
                     bg = table.getBackground(); fg = table.getForeground();
                 }
