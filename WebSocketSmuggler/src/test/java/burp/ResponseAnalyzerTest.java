@@ -78,6 +78,48 @@ class ResponseAnalyzerTest {
         assertEquals("-", analysis.code2);
         assertEquals("WebSocket Upgrade Accepted - Manual Validation Required", analysis.status);
         assertTrue(analysis.hasUpgradeHeaders);
+        assertTrue(ResponseAnalyzer.hasAcceptedWebSocketUpgrade(bytes(raw)));
+        assertFalse(ResponseAnalyzer.hasSufficientEvidence(bytes(raw)));
+    }
+
+    @Test
+    void parsesCompleteHttpResponseAfterWebSocketUpgradeBoundary() {
+        String raw = "HTTP/1.1 101 Switching Protocols\r\n" +
+                "Connection: Upgrade\r\n" +
+                "Upgrade: websocket\r\n" +
+                "\r\n" +
+                "HTTP/1.1 200 OK\r\n" +
+                "Content-Length: 2\r\n" +
+                "\r\n" +
+                "OK";
+
+        ResponseAnalyzer.ResponseAnalysis analysis = ResponseAnalyzer.analyze(bytes(raw));
+
+        assertEquals("101", analysis.code1);
+        assertEquals("200", analysis.code2);
+        assertEquals("Second HTTP-Like Response Observed (101 -> 200) - Manual Validation Required", analysis.status);
+        assertTrue(analysis.hasUpgradeHeaders);
+        assertTrue(ResponseAnalyzer.hasSufficientEvidence(bytes(raw)));
+    }
+
+    @Test
+    void doesNotTreatPartialPostUpgradeHttpResponseAsSufficientEvidence() {
+        String raw = "HTTP/1.1 101 Switching Protocols\r\n" +
+                "Connection: Upgrade\r\n" +
+                "Upgrade: websocket\r\n" +
+                "\r\n" +
+                "HTTP/1.1 200 OK\r\n" +
+                "Content-Length: 5\r\n" +
+                "\r\n" +
+                "OK";
+
+        ResponseAnalyzer.ResponseAnalysis analysis = ResponseAnalyzer.analyze(bytes(raw),
+                ResponseAnalyzer.CaptureTermination.IDLE_TIMEOUT);
+
+        assertEquals("101", analysis.code1);
+        assertEquals("-", analysis.code2);
+        assertEquals("WebSocket Upgrade Accepted - Manual Validation Required [Idle Timeout]", analysis.status);
+        assertFalse(ResponseAnalyzer.hasSufficientEvidence(bytes(raw)));
     }
 
     @Test
@@ -156,10 +198,10 @@ class ResponseAnalyzerTest {
                 "\r\n";
 
         ResponseAnalyzer.ResponseAnalysis analysis = ResponseAnalyzer.analyze(bytes(raw),
-                ResponseAnalyzer.CaptureTermination.EVIDENCE_COMPLETE);
+                ResponseAnalyzer.CaptureTermination.IDLE_TIMEOUT);
 
-        assertEquals("WebSocket Upgrade Accepted - Manual Validation Required [Evidence Complete]", analysis.status);
-        assertEquals("Evidence Complete", analysis.captureTermination);
+        assertEquals("WebSocket Upgrade Accepted - Manual Validation Required [Idle Timeout]", analysis.status);
+        assertEquals("Idle Timeout", analysis.captureTermination);
     }
 
     @Test

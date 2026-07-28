@@ -24,6 +24,7 @@ public class AttackConfig {
     private final int threadCount;
     private final int maxPayloadBytes;
     private final boolean allowRawRequestTargets;
+    private final boolean differentialValidationEnabled;
     private final boolean preserveSelectedHeaders;
     private final String preservedHeaderNames;
     private final boolean verifyTlsCertificates;
@@ -35,6 +36,7 @@ public class AttackConfig {
                         int connectTimeoutMs, int readTimeoutMs, int idleTimeoutMs,
                         int maxCaptureBytes, int requestDelayMs, int threadCount,
                         int maxPayloadBytes, boolean allowRawRequestTargets,
+                        boolean differentialValidationEnabled,
                         boolean preserveSelectedHeaders, String preservedHeaderNames,
                         boolean verifyTlsCertificates, String sniOverride,
                         String connectionAddressOverride) {
@@ -52,6 +54,7 @@ public class AttackConfig {
         this.threadCount = threadCount;
         this.maxPayloadBytes = maxPayloadBytes;
         this.allowRawRequestTargets = allowRawRequestTargets;
+        this.differentialValidationEnabled = differentialValidationEnabled;
         this.preserveSelectedHeaders = preserveSelectedHeaders;
         this.preservedHeaderNames = preservedHeaderNames;
         this.verifyTlsCertificates = verifyTlsCertificates;
@@ -133,6 +136,7 @@ public class AttackConfig {
     public int getThreadCount() { return threadCount; }
     public int getMaxPayloadBytes() { return maxPayloadBytes; }
     public boolean isAllowRawRequestTargets() { return allowRawRequestTargets; }
+    public boolean isDifferentialValidationEnabled() { return differentialValidationEnabled; }
     public boolean isPreserveSelectedHeaders() { return preserveSelectedHeaders; }
     public String getPreservedHeaderNames() { return preservedHeaderNames; }
     public boolean isVerifyTlsCertificates() { return verifyTlsCertificates; }

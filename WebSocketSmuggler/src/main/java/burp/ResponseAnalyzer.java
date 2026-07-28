@@ -86,8 +86,17 @@ public class ResponseAnalyzer {
 
         String raw = new String(rawBytes, StandardCharsets.ISO_8859_1);
         List<ParsedResponse> responses = parseResponses(raw);
-        return responses.size() >= 2 || responses.stream().anyMatch(response ->
-                response.statusCode == 101 && response.hasWebSocketUpgrade());
+        return responses.size() >= 2;
+    }
+
+    public static boolean hasAcceptedWebSocketUpgrade(byte[] rawBytes) {
+        if (rawBytes == null || rawBytes.length == 0) return false;
+
+        String raw = new String(rawBytes, StandardCharsets.ISO_8859_1);
+        List<ParsedResponse> responses = parseResponses(raw);
+        return !responses.isEmpty()
+                && responses.get(0).statusCode == 101
+                && responses.get(0).hasWebSocketUpgrade();
     }
 
     private static String classify(List<ParsedResponse> responses) {
@@ -171,6 +180,7 @@ public class ResponseAnalyzer {
 
         Map<String, List<String>> headers = parseHeaders(raw.substring(headersStart, headerEnd.headersEnd));
         BodyBoundary boundary = findBodyBoundary(raw, headerEnd.bodyStart, statusCode, headers);
+        if (!boundary.complete) return null;
         return new ParsedResponse(statusCode, parts[1], headers, boundary.nextOffset, boundary.consumesRemainder);
     }
 
@@ -189,25 +199,27 @@ public class ResponseAnalyzer {
 
     private static BodyBoundary findBodyBoundary(String raw, int bodyStart, int statusCode, Map<String, List<String>> headers) {
         if (statusCode == 101) {
-            return new BodyBoundary(raw.length(), true);
+            return new BodyBoundary(bodyStart, false, true);
         }
 
         if (hasHeaderValue(headers, "transfer-encoding", "chunked")) {
             int chunkedEnd = findChunkedBodyEnd(raw, bodyStart);
-            return new BodyBoundary(chunkedEnd, chunkedEnd >= raw.length());
+            boolean complete = chunkedEnd <= raw.length() && isChunkedBodyComplete(raw, bodyStart);
+            return new BodyBoundary(chunkedEnd, chunkedEnd >= raw.length(), complete);
         }
 
         Integer contentLength = contentLength(headers);
         if (contentLength != null) {
-            int nextOffset = Math.min(raw.length(), bodyStart + contentLength);
-            return new BodyBoundary(nextOffset, nextOffset >= raw.length());
+            int expectedEnd = bodyStart + contentLength;
+            int nextOffset = Math.min(raw.length(), expectedEnd);
+            return new BodyBoundary(nextOffset, nextOffset >= raw.length(), expectedEnd <= raw.length());
         }
 
         if ((statusCode >= 100 && statusCode < 200) || statusCode == 204 || statusCode == 304) {
-            return new BodyBoundary(bodyStart, false);
+            return new BodyBoundary(bodyStart, false, true);
         }
 
-        return new BodyBoundary(raw.length(), true);
+        return new BodyBoundary(raw.length(), true, true);
     }
 
     private static int findChunkedBodyEnd(String raw, int offset) {
@@ -247,6 +259,49 @@ public class ResponseAnalyzer {
             }
         }
         return raw.length();
+    }
+
+    private static boolean isChunkedBodyComplete(String raw, int offset) {
+        int end = findChunkedBodyEnd(raw, offset);
+        return end < raw.length() || hasCompleteTerminatingChunk(raw, offset);
+    }
+
+    private static boolean hasCompleteTerminatingChunk(String raw, int offset) {
+        int pos = offset;
+        while (pos < raw.length()) {
+            int sizeLineEnd = findLineEnd(raw, pos);
+            if (sizeLineEnd < 0) return false;
+
+            String sizeLine = raw.substring(pos, sizeLineEnd).trim();
+            int extensionStart = sizeLine.indexOf(';');
+            if (extensionStart >= 0) sizeLine = sizeLine.substring(0, extensionStart).trim();
+
+            int chunkSize;
+            try {
+                chunkSize = Integer.parseInt(sizeLine, 16);
+            } catch (NumberFormatException e) {
+                return false;
+            }
+
+            pos = nextLineStart(raw, sizeLineEnd);
+            if (chunkSize == 0) {
+                int emptyTrailerEnd = findLineEnd(raw, pos);
+                if (emptyTrailerEnd == pos) return true;
+                return findHeaderEnd(raw, pos) != null;
+            }
+
+            pos += chunkSize;
+            if (pos >= raw.length()) return false;
+
+            if (raw.charAt(pos) == '\r' && pos + 1 < raw.length() && raw.charAt(pos + 1) == '\n') {
+                pos += 2;
+            } else if (raw.charAt(pos) == '\n') {
+                pos++;
+            } else {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static Integer contentLength(Map<String, List<String>> headers) {
@@ -338,10 +393,12 @@ public class ResponseAnalyzer {
     private static class BodyBoundary {
         private final int nextOffset;
         private final boolean consumesRemainder;
+        private final boolean complete;
 
-        private BodyBoundary(int nextOffset, boolean consumesRemainder) {
+        private BodyBoundary(int nextOffset, boolean consumesRemainder, boolean complete) {
             this.nextOffset = nextOffset;
             this.consumesRemainder = consumesRemainder;
+            this.complete = complete;
         }
     }
 }

@@ -32,9 +32,30 @@ final class RequestTemplateBuilder {
 
     static String buildSmugglingRequest(HttpRequest baseRequest, String fallbackHost, int port,
                                         AttackConfig config, String payload) {
-        List<HeaderLine> baseHeaders = baseRequest != null ? fromMontoyaHeaders(baseRequest.headers()) : Collections.emptyList();
+        List<HeaderLine> baseHeaders = fromBaseRequest(baseRequest);
         return buildSmugglingRequest(baseHeaders, fallbackHost, port, config.getBaitPath(),
                 config.resolveSmugglePath(payload), config.getWsVersion(),
+                config.isPreserveSelectedHeaders(), config.getPreservedHeaderNames());
+    }
+
+    static String buildDirectProtectedRequest(HttpRequest baseRequest, String fallbackHost, int port,
+                                              AttackConfig config, String payload) {
+        return buildDirectProtectedRequest(fromBaseRequest(baseRequest), fallbackHost, port,
+                config.resolveSmugglePath(payload), config.isPreserveSelectedHeaders(),
+                config.getPreservedHeaderNames());
+    }
+
+    static String buildNormalPipelinedRequest(HttpRequest baseRequest, String fallbackHost, int port,
+                                             AttackConfig config, String payload) {
+        return buildNormalPipelinedRequest(fromBaseRequest(baseRequest), fallbackHost, port,
+                config.getBaitPath(), config.resolveSmugglePath(payload),
+                config.isPreserveSelectedHeaders(), config.getPreservedHeaderNames());
+    }
+
+    static String buildFailedUpgradeRequest(HttpRequest baseRequest, String fallbackHost, int port,
+                                            AttackConfig config, String payload) {
+        return buildFailedUpgradeRequest(fromBaseRequest(baseRequest), fallbackHost, port,
+                config.getBaitPath(), config.resolveSmugglePath(payload),
                 config.isPreserveSelectedHeaders(), config.getPreservedHeaderNames());
     }
 
@@ -54,6 +75,41 @@ final class RequestTemplateBuilder {
         StringBuilder request = new StringBuilder();
         appendFirstRequest(request, baitPath, wsVersion, hostHeader, selectedContext);
         appendSmuggledRequest(request, smuggledPath, hostHeader, selectedContext);
+        return request.toString();
+    }
+
+    static String buildDirectProtectedRequest(List<HeaderLine> baseHeaders, String fallbackHost, int port,
+                                              String protectedPath, boolean preserveSelectedHeaders,
+                                              String preservedHeaderNames) {
+        RequestContext context = requestContext(baseHeaders, fallbackHost, port,
+                preserveSelectedHeaders, preservedHeaderNames);
+
+        StringBuilder request = new StringBuilder();
+        appendPlainRequest(request, protectedPath, context.hostHeader, context.selectedHeaders);
+        return request.toString();
+    }
+
+    static String buildNormalPipelinedRequest(List<HeaderLine> baseHeaders, String fallbackHost, int port,
+                                             String baitPath, String protectedPath,
+                                             boolean preserveSelectedHeaders, String preservedHeaderNames) {
+        RequestContext context = requestContext(baseHeaders, fallbackHost, port,
+                preserveSelectedHeaders, preservedHeaderNames);
+
+        StringBuilder request = new StringBuilder();
+        appendPlainRequest(request, baitPath, context.hostHeader, context.selectedHeaders);
+        appendPlainRequest(request, protectedPath, context.hostHeader, context.selectedHeaders);
+        return request.toString();
+    }
+
+    static String buildFailedUpgradeRequest(List<HeaderLine> baseHeaders, String fallbackHost, int port,
+                                            String baitPath, String protectedPath,
+                                            boolean preserveSelectedHeaders, String preservedHeaderNames) {
+        RequestContext context = requestContext(baseHeaders, fallbackHost, port,
+                preserveSelectedHeaders, preservedHeaderNames);
+
+        StringBuilder request = new StringBuilder();
+        appendFirstRequest(request, baitPath, "0", context.hostHeader, context.selectedHeaders);
+        appendSmuggledRequest(request, protectedPath, context.hostHeader, context.selectedHeaders);
         return request.toString();
     }
 
@@ -85,7 +141,12 @@ final class RequestTemplateBuilder {
 
     private static void appendSmuggledRequest(StringBuilder request, String smuggledPath,
                                               String hostHeader, List<HeaderLine> selectedContext) {
-        request.append("GET ").append(smuggledPath).append(" HTTP/1.1\r\n");
+        appendPlainRequest(request, smuggledPath, hostHeader, selectedContext);
+    }
+
+    private static void appendPlainRequest(StringBuilder request, String path,
+                                           String hostHeader, List<HeaderLine> selectedContext) {
+        request.append("GET ").append(path).append(" HTTP/1.1\r\n");
         request.append("Host: ").append(hostHeader).append("\r\n");
         appendContextHeaders(request, selectedContext);
         if (!containsHeader(selectedContext, "user-agent")) {
@@ -146,6 +207,23 @@ final class RequestTemplateBuilder {
         return lines;
     }
 
+    private static List<HeaderLine> fromBaseRequest(HttpRequest baseRequest) {
+        return baseRequest != null ? fromMontoyaHeaders(baseRequest.headers()) : Collections.emptyList();
+    }
+
+    private static RequestContext requestContext(List<HeaderLine> baseHeaders, String fallbackHost, int port,
+                                                 boolean preserveSelectedHeaders, String preservedHeaderNames) {
+        Set<String> selectedHeaders = preserveSelectedHeaders
+                ? parseHeaderNames(preservedHeaderNames)
+                : Collections.emptySet();
+        List<HeaderLine> selectedContext = preserveSelectedHeaders
+                ? selectedContextHeaders(baseHeaders, selectedHeaders)
+                : Collections.emptyList();
+        String hostHeader = findPreservedHost(baseHeaders, selectedHeaders, preserveSelectedHeaders);
+        if (hostHeader == null) hostHeader = fallbackHostHeader(fallbackHost, port);
+        return new RequestContext(hostHeader, selectedContext);
+    }
+
     private static String fallbackHostHeader(String host, int port) {
         if (host == null || host.isBlank()) return "";
         return host + ":" + port;
@@ -167,6 +245,16 @@ final class RequestTemplateBuilder {
         HeaderLine(String name, String value) {
             this.name = name;
             this.value = value;
+        }
+    }
+
+    private static class RequestContext {
+        final String hostHeader;
+        final List<HeaderLine> selectedHeaders;
+
+        private RequestContext(String hostHeader, List<HeaderLine> selectedHeaders) {
+            this.hostHeader = hostHeader;
+            this.selectedHeaders = selectedHeaders;
         }
     }
 }

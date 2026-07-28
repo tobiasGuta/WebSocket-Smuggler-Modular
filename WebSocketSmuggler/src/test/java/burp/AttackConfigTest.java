@@ -126,6 +126,7 @@ class AttackConfigTest {
                 1,
                 maxPayloadBytes,
                 allowRawTargets,
+                false,
                 true,
                 RequestTemplateBuilder.DEFAULT_PRESERVED_HEADERS,
                 true,

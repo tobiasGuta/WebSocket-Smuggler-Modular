@@ -86,6 +86,46 @@ class RequestTemplateBuilderTest {
         assertFalse(request.contains("Cookie: sid=abc"));
     }
 
+    @Test
+    void buildsDifferentialDirectProtectedRequest() {
+        List<RequestTemplateBuilder.HeaderLine> headers = List.of(
+                new RequestTemplateBuilder.HeaderLine("Host", "tenant.example"),
+                new RequestTemplateBuilder.HeaderLine("Cookie", "sid=abc")
+        );
+
+        String request = RequestTemplateBuilder.buildDirectProtectedRequest(headers, "10.0.0.10", 8443,
+                "/admin", true, RequestTemplateBuilder.DEFAULT_PRESERVED_HEADERS);
+
+        assertTrue(request.startsWith("GET /admin HTTP/1.1\r\n"));
+        assertEquals(1, occurrences(request, "Host: tenant.example\r\n"));
+        assertEquals(1, occurrences(request, "Cookie: sid=abc\r\n"));
+        assertFalse(request.contains("Upgrade: websocket"));
+    }
+
+    @Test
+    void buildsDifferentialNormalPipeliningControlWithoutUpgradeHeaders() {
+        String request = RequestTemplateBuilder.buildNormalPipelinedRequest(List.of(), "example.com", 443,
+                "/socket", "/admin", false, "");
+
+        assertEquals(2, occurrences(request, "GET "));
+        assertTrue(request.contains("GET /socket HTTP/1.1\r\n"));
+        assertTrue(request.contains("GET /admin HTTP/1.1\r\n"));
+        assertFalse(request.contains("Upgrade: websocket"));
+        assertFalse(request.contains("Connection: Upgrade"));
+    }
+
+    @Test
+    void buildsDifferentialFailedUpgradeControlWithInvalidWebSocketVersion() {
+        String request = RequestTemplateBuilder.buildFailedUpgradeRequest(List.of(), "example.com", 443,
+                "/socket", "/admin", false, "");
+
+        assertTrue(request.contains("GET /socket HTTP/1.1\r\n"));
+        assertTrue(request.contains("Connection: Upgrade\r\n"));
+        assertTrue(request.contains("Upgrade: websocket\r\n"));
+        assertTrue(request.contains("Sec-WebSocket-Version: 0\r\n"));
+        assertTrue(request.contains("GET /admin HTTP/1.1\r\n"));
+    }
+
     private static int occurrences(String value, String needle) {
         int count = 0;
         int offset = 0;

@@ -218,34 +218,14 @@ public class AttackEngine {
         run.awaitIfPaused();
         if (run.isCancelled()) return;
 
-        String fullRequestStr = RequestTemplateBuilder.buildSmugglingRequest(
-                baseRequest.request(), host, port, config, payload);
-
-        Socket socket = null;
         try {
-            socket = createSocket(run, connectHost, port, isSecure,
-                    config.isVerifyTlsCertificates(), sniHost,
-                    config.getConnectTimeoutMs(), config.getReadTimeoutMs());
-
-            OutputStream out = socket.getOutputStream();
-            InputStream in = socket.getInputStream();
-
-            run.awaitIfPaused();
-            if (run.isCancelled()) return;
-
-            out.write(fullRequestStr.getBytes(StandardCharsets.ISO_8859_1));
-            out.flush();
-
-            CaptureResult capture = captureResponse(run, socket, in, config);
-            if (run.isCancelled()) return;
-
-            byte[] responseBytes = capture.bytes;
-            ResponseAnalyzer.ResponseAnalysis analysis = ResponseAnalyzer.analyze(responseBytes, capture.termination);
-
-            HttpRequest burpReq = HttpRequest.httpRequest(baseRequest.httpService(), fullRequestStr);
-            HttpResponse burpRes = HttpResponse.httpResponse(ByteArray.byteArray(responseBytes));
-
-            listener.onAttackComplete(id, new AttackLog(burpReq, burpRes, analysis), analysis);
+            if (config.isDifferentialValidationEnabled()) {
+                executeDifferentialAttack(run, id, baseRequest, config, payload,
+                        host, connectHost, sniHost, port, isSecure);
+            } else {
+                executeSingleProbe(run, id, baseRequest, config, payload,
+                        host, connectHost, sniHost, port, isSecure);
+            }
 
         } catch (SocketTimeoutException ex) {
             if (run.isCancelled()) return;
@@ -263,6 +243,81 @@ public class AttackEngine {
             if (run.isCancelled()) return;
             listener.onAttackError(id, ex.getMessage());
             api.logging().logToError("Attack error (ID " + id + "): " + ex.getMessage());
+        }
+    }
+
+    private void executeSingleProbe(AttackRun run, int id, HttpRequestResponse baseRequest,
+                                    AttackConfig config, String payload, String host,
+                                    String connectHost, String sniHost, int port, boolean isSecure)
+            throws IOException, InterruptedException {
+        String request = RequestTemplateBuilder.buildSmugglingRequest(
+                baseRequest.request(), host, port, config, payload);
+        CaptureResult capture = sendRawProbe(run, request, connectHost, sniHost, port, isSecure, config);
+        if (run.isCancelled()) return;
+
+        byte[] responseBytes = capture.bytes;
+        ResponseAnalyzer.ResponseAnalysis analysis = ResponseAnalyzer.analyze(responseBytes, capture.termination);
+        listener.onAttackComplete(id, attackLog(baseRequest, request, responseBytes, analysis), analysis);
+    }
+
+    private void executeDifferentialAttack(AttackRun run, int id, HttpRequestResponse baseRequest,
+                                           AttackConfig config, String payload, String host,
+                                           String connectHost, String sniHost, int port, boolean isSecure)
+            throws IOException, InterruptedException {
+        HttpRequest selectedRequest = baseRequest.request();
+        String directRequest = RequestTemplateBuilder.buildDirectProtectedRequest(
+                selectedRequest, host, port, config, payload);
+        String pipelinedRequest = RequestTemplateBuilder.buildNormalPipelinedRequest(
+                selectedRequest, host, port, config, payload);
+        String failedUpgradeRequest = RequestTemplateBuilder.buildFailedUpgradeRequest(
+                selectedRequest, host, port, config, payload);
+        String acceptedUpgradeRequest = RequestTemplateBuilder.buildSmugglingRequest(
+                selectedRequest, host, port, config, payload);
+
+        CaptureResult direct = sendRawProbe(run, directRequest, connectHost, sniHost, port, isSecure, config);
+        if (run.isCancelled()) return;
+        CaptureResult pipelined = sendRawProbe(run, pipelinedRequest, connectHost, sniHost, port, isSecure, config);
+        if (run.isCancelled()) return;
+        CaptureResult failedUpgrade = sendRawProbe(run, failedUpgradeRequest, connectHost, sniHost, port, isSecure, config);
+        if (run.isCancelled()) return;
+        CaptureResult acceptedUpgrade = sendRawProbe(run, acceptedUpgradeRequest, connectHost, sniHost, port, isSecure, config);
+        if (run.isCancelled()) return;
+
+        ResponseAnalyzer.ResponseAnalysis analysis = DifferentialValidation.summarize(
+                ResponseAnalyzer.analyze(direct.bytes, direct.termination),
+                ResponseAnalyzer.analyze(pipelined.bytes, pipelined.termination),
+                ResponseAnalyzer.analyze(failedUpgrade.bytes, failedUpgrade.termination),
+                ResponseAnalyzer.analyze(acceptedUpgrade.bytes, acceptedUpgrade.termination)
+        );
+        listener.onAttackComplete(id, attackLog(baseRequest, acceptedUpgradeRequest, acceptedUpgrade.bytes, analysis), analysis);
+    }
+
+    private AttackLog attackLog(HttpRequestResponse baseRequest, String request, byte[] responseBytes,
+                                ResponseAnalyzer.ResponseAnalysis analysis) {
+        HttpRequest burpReq = HttpRequest.httpRequest(baseRequest.httpService(), request);
+        HttpResponse burpRes = HttpResponse.httpResponse(ByteArray.byteArray(responseBytes));
+        return new AttackLog(burpReq, burpRes, analysis);
+    }
+
+    private CaptureResult sendRawProbe(AttackRun run, String request, String connectHost,
+                                       String sniHost, int port, boolean isSecure, AttackConfig config)
+            throws IOException, InterruptedException {
+        Socket socket = null;
+        try {
+            socket = createSocket(run, connectHost, port, isSecure,
+                    config.isVerifyTlsCertificates(), sniHost,
+                    config.getConnectTimeoutMs(), config.getReadTimeoutMs());
+
+            OutputStream out = socket.getOutputStream();
+            InputStream in = socket.getInputStream();
+
+            run.awaitIfPaused();
+            if (run.isCancelled()) return new CaptureResult(new byte[0], ResponseAnalyzer.CaptureTermination.ERROR);
+
+            out.write(request.getBytes(StandardCharsets.ISO_8859_1));
+            out.flush();
+
+            return captureResponse(run, socket, in, config);
         } finally {
             if (socket != null) {
                 run.untrackSocket(socket);
@@ -277,6 +332,7 @@ public class AttackEngine {
                 Math.min(config.getMaxCaptureBytes(), 64 * 1024));
         byte[] data = new byte[8192];
         long readDeadline = System.currentTimeMillis() + config.getReadTimeoutMs();
+        boolean postUpgradeObserved = false;
 
         while (!run.isCancelled()) {
             run.awaitIfPaused();
@@ -301,12 +357,17 @@ public class AttackEngine {
                 }
 
                 buffer.write(data, 0, nRead);
+                byte[] snapshot = buffer.toByteArray();
 
                 if (buffer.size() >= config.getMaxCaptureBytes()) {
-                    return new CaptureResult(buffer.toByteArray(), ResponseAnalyzer.CaptureTermination.TRUNCATED);
+                    return new CaptureResult(snapshot, ResponseAnalyzer.CaptureTermination.TRUNCATED);
                 }
-                if (ResponseAnalyzer.hasSufficientEvidence(buffer.toByteArray())) {
-                    return new CaptureResult(buffer.toByteArray(), ResponseAnalyzer.CaptureTermination.EVIDENCE_COMPLETE);
+                if (!postUpgradeObserved && ResponseAnalyzer.hasAcceptedWebSocketUpgrade(snapshot)) {
+                    postUpgradeObserved = true;
+                    readDeadline = System.currentTimeMillis() + config.getReadTimeoutMs();
+                }
+                if (ResponseAnalyzer.hasSufficientEvidence(snapshot)) {
+                    return new CaptureResult(snapshot, ResponseAnalyzer.CaptureTermination.EVIDENCE_COMPLETE);
                 }
             } catch (SocketTimeoutException e) {
                 ResponseAnalyzer.CaptureTermination reason =

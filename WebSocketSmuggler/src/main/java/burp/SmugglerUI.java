@@ -56,6 +56,7 @@ public class SmugglerUI implements AttackEngine.AttackListener {
     private static final String P_THREADS = "cfg.threads";
     private static final String P_MAX_PAYLOAD_BYTES = "cfg.maxPayloadBytes";
     private static final String P_ALLOW_RAW_TARGETS = "cfg.allowRawTargets";
+    private static final String P_DIFFERENTIAL_VALIDATION = "cfg.differentialValidation";
     private static final String P_REQUIRE_SCOPE = "cfg.requireScope";
     private static final String P_PRESERVE_HEADERS = "cfg.preserveHeaders";
     private static final String P_PRESERVED_HEADER_NAMES = "cfg.preservedHeaderNames";
@@ -90,6 +91,7 @@ public class SmugglerUI implements AttackEngine.AttackListener {
     private JTextField threadsField;
     private JTextField maxPayloadBytesField;
     private JCheckBox allowRawTargetsToggle;
+    private JCheckBox differentialValidationToggle;
     private JCheckBox requireScopeToggle;
     private JCheckBox preserveHeadersToggle;
     private JTextField preservedHeadersField;
@@ -157,6 +159,7 @@ public class SmugglerUI implements AttackEngine.AttackListener {
             data.setString(P_THREADS, threadsField.getText());
             data.setString(P_MAX_PAYLOAD_BYTES, maxPayloadBytesField.getText());
             data.setBoolean(P_ALLOW_RAW_TARGETS, allowRawTargetsToggle.isSelected());
+            data.setBoolean(P_DIFFERENTIAL_VALIDATION, differentialValidationToggle.isSelected());
             data.setBoolean(P_REQUIRE_SCOPE, requireScopeToggle.isSelected());
             data.setBoolean(P_PRESERVE_HEADERS, preserveHeadersToggle.isSelected());
             data.setString(P_PRESERVED_HEADER_NAMES, preservedHeadersField.getText());
@@ -355,10 +358,14 @@ public class SmugglerUI implements AttackEngine.AttackListener {
         requireScopeToggle = new JCheckBox("Require Burp scope", true);
         requireScopeToggle.setToolTipText("Block Run Attack unless the selected target is in Burp's configured target scope");
         requireScopeToggle.addActionListener(e -> saveConfig());
+        differentialValidationToggle = new JCheckBox("Run differential validation", false);
+        differentialValidationToggle.setToolTipText("Send direct, pipelined, failed-upgrade, and accepted-upgrade probes for each payload");
+        differentialValidationToggle.addActionListener(e -> saveConfig());
         wlPanel.add(loadWordlistBtn);
         wlPanel.add(wordlistStatusLabel);
         wlPanel.add(Box.createHorizontalStrut(20));
         wlPanel.add(requireScopeToggle);
+        wlPanel.add(differentialValidationToggle);
 
         progressBar = new JProgressBar(0, 100);
         progressBar.setStringPainted(true);
@@ -721,6 +728,7 @@ public class SmugglerUI implements AttackEngine.AttackListener {
                     Integer.parseInt(threadsField.getText().trim()),
                     Integer.parseInt(maxPayloadBytesField.getText().trim()),
                     allowRawTargetsToggle.isSelected(),
+                    differentialValidationToggle.isSelected(),
                     preserveHeadersToggle.isSelected(),
                     preservedHeadersField.getText().trim(),
                     verifyTlsToggle.isSelected(),
@@ -764,6 +772,8 @@ public class SmugglerUI implements AttackEngine.AttackListener {
             setIfPresent(data.getString(P_MAX_PAYLOAD_BYTES), maxPayloadBytesField);
             Boolean allowRawTargets = data.getBoolean(P_ALLOW_RAW_TARGETS);
             if (allowRawTargets != null) allowRawTargetsToggle.setSelected(allowRawTargets);
+            Boolean differentialValidation = data.getBoolean(P_DIFFERENTIAL_VALIDATION);
+            if (differentialValidation != null) differentialValidationToggle.setSelected(differentialValidation);
             Boolean requireScope = data.getBoolean(P_REQUIRE_SCOPE);
             if (requireScope != null) requireScopeToggle.setSelected(requireScope);
             Boolean preserveHeaders = data.getBoolean(P_PRESERVE_HEADERS);

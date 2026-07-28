@@ -166,6 +166,7 @@ Long-running fuzzing attacks can be managed using the control panel:
 
 * **Run Attack:** Fires a single probe (no wordlist) or starts wordlist iteration. Requires a target sent via right-click context menu.
 * **Require Burp scope:** Blocks `Run Attack` for targets outside Burp's configured target scope. Enabled by default.
+* **Run differential validation:** Optional. Sends four probes for each payload: direct protected-path request, normal HTTP pipelining, failed WebSocket-upgrade sequence, and accepted WebSocket-upgrade sequence. Only the explicit `Run Attack` action starts this traffic.
 * **Pause/Resume:** Pauses new submissions and worker progress checks. Already-active socket reads may continue until data arrives, idle timeout fires, or the read timeout expires.
 * **Stop:** Cancels the current run, stops queued work, and closes active sockets.
 * **Clear Results:** Clears the results table and attack history.
@@ -177,12 +178,14 @@ A **progress bar** shows real-time completion status. Wordlist submissions use a
 
 ## Interpreting Results (Status Logic)
 
-The extension parses response boundaries before interpreting status lines or headers. Results are **color-coded** for triage, but analyzer output is evidence, not proof of exploitability. Treat observations as manual-validation prompts unless a separate differential test shows that a protected request succeeds through the upgrade sequence and fails through the normal front-end route.
+The extension parses response boundaries before interpreting status lines or headers. Results are **color-coded** for triage, but analyzer output is evidence, not proof of exploitability. In normal mode, treat observations as manual-validation prompts. If **Run differential validation** is enabled, the extension compares direct, pipelined, failed-upgrade, and accepted-upgrade probes and only uses differential language when the accepted-upgrade path exposes a protected 2xx/3xx response while the controls do not.
 
 | Status | Color | Meaning | Verdict |
 | :--- | :--- | :--- | :--- |
 | **WebSocket Upgrade Accepted - Manual Validation Required** | Amber | A real `101 Switching Protocols` response included `Connection: Upgrade` and `Upgrade: websocket` headers. This confirms the handshake was accepted, not that smuggling occurred. | **Evidence Only** |
 | **Second HTTP-Like Response Observed (X -> Y) - Manual Validation Required** | Amber | Two complete HTTP response boundaries were parsed and the second response was 2xx/3xx. This can be normal HTTP pipelining. | **Evidence Only** |
+| **Differential Behavior Observed - ... - Manual Validation Required** | Red | Differential mode saw a protected 2xx/3xx response only after an accepted WebSocket upgrade; direct, normal-pipelined, and failed-upgrade controls did not expose it. | **High-Value Evidence** |
+| **Possible Pipelining - Control path also returned protected response - Manual Validation Required** | Amber | Differential mode saw the protected response through the accepted upgrade, but at least one control did too. | **Evidence Only** |
 | **Possible Pipelining (X -> Y) - Manual Validation Required** | Amber | Two complete HTTP response boundaries were parsed and the second response was not 2xx/3xx. | **Evidence Only** |
 | **Single Response (X) - Manual Validation Required** | Amber | One complete HTTP response was parsed. | **Evidence Only** |
 | **No Response / Connection Closed** | Gray | No parseable HTTP response was received. | **No Evidence** |
