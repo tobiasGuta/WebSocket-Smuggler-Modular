@@ -18,6 +18,7 @@ import java.awt.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -110,8 +111,8 @@ public class SmugglerUI implements AttackEngine.AttackListener {
 
     private DefaultTableModel tableModel;
     private JTable resultsTable;
-    private HttpRequestEditor requestViewer;
-    private HttpResponseEditor responseViewer;
+    private JTabbedPane requestTabs;
+    private JTabbedPane responseTabs;
 
     private volatile HttpRequestResponse targetRequest;
     private final List<String> loadedWordlist = new CopyOnWriteArrayList<>();
@@ -189,15 +190,11 @@ public class SmugglerUI implements AttackEngine.AttackListener {
                 BorderFactory.createLineBorder(new Color(180, 180, 180)),
                 " Results ", TitledBorder.LEFT, TitledBorder.TOP, SECTION_TITLE));
 
-        requestViewer = api.userInterface().createHttpRequestEditor(EditorOptions.READ_ONLY);
-        responseViewer = api.userInterface().createHttpResponseEditor(EditorOptions.READ_ONLY);
+        requestTabs = new JTabbedPane();
+        responseTabs = new JTabbedPane();
+        clearEvidenceEditors();
 
-        JTabbedPane reqTabs = new JTabbedPane();
-        reqTabs.addTab("Request", requestViewer.uiComponent());
-        JTabbedPane resTabs = new JTabbedPane();
-        resTabs.addTab("Response", responseViewer.uiComponent());
-
-        JSplitPane viewerSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, reqTabs, resTabs);
+        JSplitPane viewerSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, requestTabs, responseTabs);
         viewerSplit.setResizeWeight(0.5);
 
         JSplitPane mainSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tableScroll, viewerSplit);
@@ -498,9 +495,7 @@ public class SmugglerUI implements AttackEngine.AttackListener {
     private void clearResults() {
         tableModel.setRowCount(0);
         attackHistory.clear();
-        HttpService dummy = HttpService.httpService("localhost", 80, false);
-        requestViewer.setRequest(HttpRequest.httpRequest(dummy, ByteArray.byteArray("")));
-        responseViewer.setResponse(HttpResponse.httpResponse(ByteArray.byteArray("")));
+        clearEvidenceEditors();
         progressBar.setValue(0);
         progressBar.setString("Ready");
     }
@@ -703,11 +698,32 @@ public class SmugglerUI implements AttackEngine.AttackListener {
             int id = (Integer) tableModel.getValueAt(modelRow, COL_ID);
             AttackLog log = attackHistory.get(id);
             if (log != null) {
-                requestViewer.setRequest(log.getRequest());
-                responseViewer.setResponse(log.getResponse());
+                showEvidenceEditors(log.getEvidence());
             }
         } catch (Exception ex) {
             api.logging().logToError("Editor update error: " + ex.getMessage());
+        }
+    }
+
+    private void clearEvidenceEditors() {
+        HttpService dummy = HttpService.httpService("localhost", 80, false);
+        AttackLog.Evidence empty = new AttackLog.Evidence("Evidence",
+                HttpRequest.httpRequest(dummy, ByteArray.byteArray("")),
+                HttpResponse.httpResponse(ByteArray.byteArray("")));
+        showEvidenceEditors(Collections.singletonList(empty));
+    }
+
+    private void showEvidenceEditors(List<AttackLog.Evidence> evidenceEntries) {
+        requestTabs.removeAll();
+        responseTabs.removeAll();
+
+        for (AttackLog.Evidence evidence : evidenceEntries) {
+            HttpRequestEditor requestEditor = api.userInterface().createHttpRequestEditor(EditorOptions.READ_ONLY);
+            HttpResponseEditor responseEditor = api.userInterface().createHttpResponseEditor(EditorOptions.READ_ONLY);
+            requestEditor.setRequest(evidence.request());
+            responseEditor.setResponse(evidence.response());
+            requestTabs.addTab(evidence.label(), requestEditor.uiComponent());
+            responseTabs.addTab(evidence.label(), responseEditor.uiComponent());
         }
     }
 

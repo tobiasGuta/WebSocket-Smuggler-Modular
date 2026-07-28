@@ -27,7 +27,19 @@ class DifferentialValidationTest {
                 analysis("101", "200", true)
         );
 
-        assertEquals("Possible Pipelining - Control path also returned protected response - Manual Validation Required", status);
+        assertEquals("Possible Pipelining - Control path returned an equivalent protected response - Manual Validation Required", status);
+    }
+
+    @Test
+    void doesNotTreatControlRedirectAsEquivalentToAcceptedUpgradeSuccess() {
+        String status = DifferentialValidation.classify(
+                analysis("302", "-", false),
+                analysis("200", "302", false),
+                analysis("426", "302", false),
+                analysis("101", "200", true)
+        );
+
+        assertEquals("Differential Behavior Observed - Accepted upgrade exposed protected response while controls did not - Manual Validation Required", status);
     }
 
     @Test

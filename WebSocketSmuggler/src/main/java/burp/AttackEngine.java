@@ -289,7 +289,12 @@ public class AttackEngine {
                 ResponseAnalyzer.analyze(failedUpgrade.bytes, failedUpgrade.termination),
                 ResponseAnalyzer.analyze(acceptedUpgrade.bytes, acceptedUpgrade.termination)
         );
-        listener.onAttackComplete(id, attackLog(baseRequest, acceptedUpgradeRequest, acceptedUpgrade.bytes, analysis), analysis);
+        listener.onAttackComplete(id, differentialAttackLog(analysis,
+                evidence(baseRequest, "Direct", directRequest, direct.bytes),
+                evidence(baseRequest, "Pipelined", pipelinedRequest, pipelined.bytes),
+                evidence(baseRequest, "Failed Upgrade", failedUpgradeRequest, failedUpgrade.bytes),
+                evidence(baseRequest, "Accepted Upgrade", acceptedUpgradeRequest, acceptedUpgrade.bytes)
+        ), analysis);
     }
 
     private AttackLog attackLog(HttpRequestResponse baseRequest, String request, byte[] responseBytes,
@@ -297,6 +302,17 @@ public class AttackEngine {
         HttpRequest burpReq = HttpRequest.httpRequest(baseRequest.httpService(), request);
         HttpResponse burpRes = HttpResponse.httpResponse(ByteArray.byteArray(responseBytes));
         return new AttackLog(burpReq, burpRes, analysis);
+    }
+
+    private AttackLog differentialAttackLog(ResponseAnalyzer.ResponseAnalysis analysis,
+                                            AttackLog.Evidence... evidence) {
+        return new AttackLog(analysis, List.of(evidence));
+    }
+
+    private AttackLog.Evidence evidence(HttpRequestResponse baseRequest, String label, String request, byte[] responseBytes) {
+        HttpRequest burpReq = HttpRequest.httpRequest(baseRequest.httpService(), request);
+        HttpResponse burpRes = HttpResponse.httpResponse(ByteArray.byteArray(responseBytes));
+        return new AttackLog.Evidence(label, burpReq, burpRes);
     }
 
     private CaptureResult sendRawProbe(AttackRun run, String request, String connectHost,
@@ -393,29 +409,38 @@ public class AttackEngine {
         // Using raw sockets instead of api.http().sendRequest() to intentionally bypass 
         // Burp's strict HTTP parsing and content-length normalization, which is fundamentally
         // required for protocol smuggling to work.
-        Socket socket;
         if (isSecure) {
             SSLSocketFactory factory = verifyTlsCertificates
                     ? (SSLSocketFactory) SSLSocketFactory.getDefault()
                     : sslSocketFactory;
-            SSLSocket ssl = (SSLSocket) factory.createSocket();
-            socket = ssl;
-            run.trackSocket(socket);
+            Socket tcp = new Socket();
+            SSLSocket ssl = null;
+            run.trackSocket(tcp);
             try {
-                socket.connect(new InetSocketAddress(host, port), connectTimeoutMs);
-                socket.setSoTimeout(readTimeoutMs);
+                tcp.connect(new InetSocketAddress(host, port), connectTimeoutMs);
+                tcp.setSoTimeout(readTimeoutMs);
                 if (run.isCancelled()) throw new SocketException("Attack cancelled");
-                applySni(ssl, sniHost);
+
+                String verificationHost = tlsIdentityHost(sniHost, host);
+                ssl = (SSLSocket) factory.createSocket(tcp, verificationHost, port, true);
+                run.trackSocket(ssl);
+                run.untrackSocket(tcp);
+                ssl.setSoTimeout(readTimeoutMs);
+                applyTlsParameters(ssl, verificationHost, verifyTlsCertificates);
                 ssl.startHandshake();
                 return ssl;
             } catch (IOException e) {
-                run.untrackSocket(socket);
-                closeQuietly(socket);
+                if (ssl != null) {
+                    run.untrackSocket(ssl);
+                    closeQuietly(ssl);
+                }
+                run.untrackSocket(tcp);
+                closeQuietly(tcp);
                 throw e;
             }
         }
 
-        socket = new Socket();
+        Socket socket = new Socket();
         run.trackSocket(socket);
         try {
             socket.connect(new InetSocketAddress(host, port), connectTimeoutMs);
@@ -428,16 +453,35 @@ public class AttackEngine {
         }
     }
 
-    private static void applySni(SSLSocket ssl, String sniHost) {
-        if (sniHost == null || sniHost.trim().isEmpty()) return;
-
-        try {
-            SSLParameters parameters = ssl.getSSLParameters();
-            parameters.setServerNames(List.of(new SNIHostName(sniHost.trim())));
-            ssl.setSSLParameters(parameters);
-        } catch (IllegalArgumentException ignored) {
-            // IP literals and some lab hostnames are not valid SNI names; connect without SNI.
+    static void applyTlsParameters(SSLSocket ssl, String identityHost, boolean verifyHostname) {
+        SSLParameters parameters = ssl.getSSLParameters();
+        if (verifyHostname) {
+            parameters.setEndpointIdentificationAlgorithm("HTTPS");
         }
+        if (isDnsHostnameForSni(identityHost)) {
+            parameters.setServerNames(List.of(new SNIHostName(identityHost.trim())));
+        }
+        ssl.setSSLParameters(parameters);
+    }
+
+    static String tlsIdentityHost(String sniHost, String connectHost) {
+        if (sniHost != null && !sniHost.trim().isEmpty()) return sniHost.trim();
+        return connectHost;
+    }
+
+    static boolean isDnsHostnameForSni(String host) {
+        if (host == null || host.trim().isEmpty()) return false;
+        String trimmed = host.trim();
+        if (trimmed.contains(":")) return false;
+        if (trimmed.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) return false;
+        if (!trimmed.matches("[A-Za-z0-9.-]+")) return false;
+
+        String[] labels = trimmed.split("\\.");
+        for (String label : labels) {
+            if (label.isEmpty() || label.length() > 63) return false;
+            if (label.startsWith("-") || label.endsWith("-")) return false;
+        }
+        return true;
     }
 
     private static void closeQuietly(Socket socket) {

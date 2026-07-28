@@ -154,9 +154,9 @@ The selected Burp request is used as the source for allowlisted headers, not jus
 * Add custom application routing headers such as `X-Tenant-ID`, `X-Org-ID`, or `X-Forwarded-Host` when the target depends on them.
 * Protocol-controlled headers such as `Connection`, `Upgrade`, `Sec-WebSocket-*`, `Content-Length`, `Transfer-Encoding`, and `Expect` are not copied because the attack payload must control those values.
 * **Connection Mode:** Always uses a direct raw TCP/TLS connection. Burp upstream proxy settings, SOCKS configuration, client certificate handling, match-and-replace rules, and project-level TLS behavior are not applied to attack traffic.
-* **Verify TLS certificates:** Disabled by default to preserve lab/proxy testing behavior. Enable it to use the JVM default trust store and reject invalid certificates.
-* **SNI Override:** Optional TLS SNI hostname. Blank uses the selected request host.
-* **Connect Host:** Optional socket destination override. This changes where the TCP/TLS connection is opened without changing the preserved `Host` header.
+* **Verify TLS certificates:** Disabled by default to preserve lab/proxy testing behavior. Enable it to use the JVM default trust store and HTTPS hostname verification.
+* **SNI Override:** Optional TLS identity/SNI hostname. Blank uses the selected request host. When TLS verification is enabled, this hostname is also used for certificate hostname matching.
+* **Connect Host:** Optional socket destination override. This changes where the TCP connection is opened without changing the preserved `Host` header or TLS verification hostname.
 
 ---
 
@@ -178,7 +178,7 @@ A **progress bar** shows real-time completion status. Wordlist submissions use a
 
 ## Interpreting Results (Status Logic)
 
-The extension parses response boundaries before interpreting status lines or headers. Results are **color-coded** for triage, but analyzer output is evidence, not proof of exploitability. In normal mode, treat observations as manual-validation prompts. If **Run differential validation** is enabled, the extension compares direct, pipelined, failed-upgrade, and accepted-upgrade probes and only uses differential language when the accepted-upgrade path exposes a protected 2xx/3xx response while the controls do not.
+The extension parses response boundaries before interpreting status lines or headers. Results are **color-coded** for triage, but analyzer output is evidence, not proof of exploitability. In normal mode, treat observations as manual-validation prompts. If **Run differential validation** is enabled, the extension compares direct, pipelined, failed-upgrade, and accepted-upgrade probes and only uses differential language when the accepted-upgrade path exposes a protected 2xx/3xx response while the controls do not return an equivalent 2xx/3xx class. Differential runs keep all four request/response pairs in the evidence viewer tabs.
 
 | Status | Color | Meaning | Verdict |
 | :--- | :--- | :--- | :--- |
