@@ -180,6 +180,8 @@ A **progress bar** shows real-time completion status. Wordlist submissions use a
 
 The extension parses response boundaries before interpreting status lines or headers. Results are **color-coded** for triage, but analyzer output is evidence, not proof of exploitability. In normal mode, treat observations as manual-validation prompts. If **Run differential validation** is enabled, the extension compares direct, pipelined, failed-upgrade, and accepted-upgrade probes and only uses differential language when the accepted-upgrade path exposes a protected 2xx/3xx response while the controls do not return an equivalent 2xx/3xx class. Differential runs keep all four request/response pairs in the evidence viewer tabs.
 
+Differential equivalence is currently status-class based. It does not yet compare response-body hashes, normalized body length, `Location`, `Content-Type`, login-page fingerprints, or target-specific markers. Use the retained evidence tabs to manually compare those details when triaging a result.
+
 | Status | Color | Meaning | Verdict |
 | :--- | :--- | :--- | :--- |
 | **WebSocket Upgrade Accepted - Manual Validation Required** | Amber | A real `101 Switching Protocols` response included `Connection: Upgrade` and `Upgrade: websocket` headers. This confirms the handshake was accepted, not that smuggling occurred. | **Evidence Only** |
